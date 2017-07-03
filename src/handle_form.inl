@@ -622,7 +622,8 @@ mg_handle_form_request(struct mg_connection *conn,
 				return -1;
 			}
 
-			parse_http_headers(&hbuf, &part_header);
+			part_header.num_headers =
+			    parse_http_headers(&hbuf, part_header.http_headers);
 			if ((hend + 2) != hbuf) {
 				/* Malformed request */
 				return -1;
@@ -633,7 +634,9 @@ mg_handle_form_request(struct mg_connection *conn,
 
 			/* According to the RFC, every part has to have a header field like:
 			 * Content-Disposition: form-data; name="..." */
-			content_disp = get_header(&part_header, "Content-Disposition");
+			content_disp = get_header(part_header.http_headers,
+			                          part_header.num_headers,
+			                          "Content-Disposition");
 			if (!content_disp) {
 				/* Malformed request */
 				return -1;
@@ -851,24 +854,19 @@ mg_handle_form_request(struct mg_connection *conn,
 						       path);
 						mg_fclose(&fstore.access);
 						remove_bad_file(conn, path);
-					}
-					file_size += (int64_t)n;
-				}
-			}
-
-			if (field_storage == FORM_FIELD_STORAGE_STORE) {
-
-				if (fstore.access.fp) {
-					r = mg_fclose(&fstore.access);
-					if (r == 0) {
-						/* stored successfully */
-						field_stored(conn, path, file_size, fdh);
 					} else {
-						mg_cry(conn,
-						       "%s: Error saving file %s",
-						       __func__,
-						       path);
-						remove_bad_file(conn, path);
+						file_size += (int64_t)n;
+						r = mg_fclose(&fstore.access);
+						if (r == 0) {
+							/* stored successfully */
+							field_stored(conn, path, file_size, fdh);
+						} else {
+							mg_cry(conn,
+							       "%s: Error saving file %s",
+							       __func__,
+							       path);
+							remove_bad_file(conn, path);
+						}
 					}
 					fstore.access.fp = NULL;
 				}

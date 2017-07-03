@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <stdint.h>
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -854,6 +855,7 @@ static void
 websock_server_ready(struct mg_connection *conn, void *udata)
 {
 	ck_assert_ptr_eq((void *)udata, (void *)7531);
+	ck_assert_ptr_ne((void *)conn, (void *)NULL);
 	WS_TEST_TRACE("Server: Websocket ready\n");
 
 	/* Send websocket welcome message */
@@ -2408,7 +2410,7 @@ START_TEST(test_handle_form)
 	    "\r\n"
 	    "val1\r\n"
 	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
-	    "Content-Disposition: form-data; name=\"radio2\"\r\n"
+	    "Content-Disposition: form-data; name=radio2\r\n"
 	    "\r\n"
 	    "val1\r\n"
 	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
@@ -2473,7 +2475,7 @@ START_TEST(test_handle_form)
 	    "\r\n"
 	    "\r\n"
 	    "--multipart-form-data-boundary--see-RFC-2388\r\n"
-	    "Content-Disposition: form-data; name=\"filesin\"; filename=\"\"\r\n"
+	    "Content-Disposition: form-data; name=filesin; filename=\r\n"
 	    "Content-Type: application/octet-stream\r\n"
 	    "\r\n"
 	    "\r\n"
@@ -2487,7 +2489,7 @@ START_TEST(test_handle_form)
 	    "Text area default text.\r\n"
 	    "--multipart-form-data-boundary--see-RFC-2388--\r\n";
 	body_len = strlen(multipart_body);
-	ck_assert_uint_eq(body_len, 2374); /* not required */
+	ck_assert_uint_eq(body_len, 2368); /* not required */
 
 	client_conn =
 	    mg_download("localhost",
@@ -2534,6 +2536,53 @@ START_TEST(test_handle_form)
 	                "boundary=multipart-form-data-boundary--see-RFC-2388\r\n"
 	                "Transfer-Encoding: chunked\r\n"
 	                "\r\n");
+
+	ck_assert(client_conn != NULL);
+
+	body_len = strlen(multipart_body);
+	chunk_len = 1;
+	body_sent = 0;
+	while (body_len > body_sent) {
+		if (chunk_len > (body_len - body_sent)) {
+			chunk_len = body_len - body_sent;
+		}
+		ck_assert_int_gt((int)chunk_len, 0);
+		mg_printf(client_conn, "%x\r\n", (unsigned int)chunk_len);
+		mg_write(client_conn, multipart_body + body_sent, chunk_len);
+		mg_printf(client_conn, "\r\n");
+		body_sent += chunk_len;
+		chunk_len = (chunk_len % 40) + 1;
+	}
+	mg_printf(client_conn, "0\r\n");
+
+	for (sleep_cnt = 0; sleep_cnt < 30; sleep_cnt++) {
+		test_sleep(1);
+		if (g_field_step == 1000) {
+			break;
+		}
+	}
+	ri = mg_get_request_info(client_conn);
+
+	ck_assert(ri != NULL);
+	ck_assert_str_eq(ri->local_uri, "200");
+	mg_close_connection(client_conn);
+
+	/* Handle form: "POST multipart/form-data" with chunked transfer
+	 * encoding, using a quoted boundary string */
+	client_conn = mg_download(
+	    "localhost",
+	    8884,
+	    0,
+	    ebuf,
+	    sizeof(ebuf),
+	    "%s",
+	    "POST /handle_form HTTP/1.1\r\n"
+	    "Host: localhost:8884\r\n"
+	    "Connection: close\r\n"
+	    "Content-Type: multipart/form-data; "
+	    "boundary=\"multipart-form-data-boundary--see-RFC-2388\"\r\n"
+	    "Transfer-Encoding: chunked\r\n"
+	    "\r\n");
 
 	ck_assert(client_conn != NULL);
 
@@ -3949,6 +3998,10 @@ test_mg_store_body_put_delete_handler(struct mg_connection *conn, void *ignored)
 		          path,
 		          (long)rc);
 		mg_close_connection(conn);
+
+		/* Debug output for tests */
+		printf("mg_store_body(%s) failed (ret: %ld)\n", path, (long)rc);
+
 		return 500;
 	}
 
@@ -3961,6 +4014,9 @@ test_mg_store_body_put_delete_handler(struct mg_connection *conn, void *ignored)
 	          (long)rc);
 	mg_close_connection(conn);
 
+	/* Debug output for tests */
+	printf("mg_store_body(%s) OK (%ld bytes)\n", path, (long)rc);
+
 	return 200;
 }
 
@@ -3970,8 +4026,12 @@ test_mg_store_body_begin_request_callback(struct mg_connection *conn)
 {
 	const struct mg_request_info *info = mg_get_request_info(conn);
 
-	if (strcmp(info->request_method, "PUT") == 0
-	    || strcmp(info->request_method, "DELETE") == 0) {
+	/* Debug output for tests */
+	printf("test_mg_store_body_begin_request_callback called (%s)\n",
+	       info->request_method);
+
+	if ((strcmp(info->request_method, "PUT") == 0)
+	    || (strcmp(info->request_method, "DELETE") == 0)) {
 		return test_mg_store_body_put_delete_handler(conn, NULL);
 	}
 	return 0;
@@ -4054,7 +4114,7 @@ START_TEST(test_mg_store_body)
 	ck_assert_ptr_ne(client_ri->request_uri, NULL);
 	ck_assert_str_eq(client_ri->request_uri, "200");
 
-	/* Nothing left to read */
+	/* Read PUT response */
 	r = mg_read(client, client_data_buf, sizeof(client_data_buf) - 1);
 	ck_assert_int_gt(r, 0);
 	client_data_buf[r] = 0;
